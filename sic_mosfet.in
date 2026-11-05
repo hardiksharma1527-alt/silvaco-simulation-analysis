@@ -1,0 +1,199 @@
+go atlas
+
+# ==========================================================================
+# 4H-SiC PLANAR DMOSFET HALF-CELL (6 um pitch -> 3 um half-cell)
+# Units: ATLAS lengths in micrometres (um). Currents are A per um of depth.
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# 0) EDIT-ME PARAMETERS (change ONE at a time for a parametric study)
+# --------------------------------------------------------------------------
+# Oxide thickness in um (0.035 = 35 nm). Try 0.025 and 0.050.
+set tox=0.035
+# Negative y coordinate of the gate-oxide top (computed from tox).
+set ytox=-1*$"tox"
+# P-well peak doping in cm-3. Try 3e17 and 1.5e18.
+set pwell=8e17
+# Fixed oxide charge at SiO2/SiC interface in cm-2 (positive = lowers Vth).
+set qfix=2e11
+# Lattice temperature in Kelvin. Try 300, 400, 500.
+set temp=300
+
+# --------------------------------------------------------------------------
+# 1) MESH  (x = lateral 0-3 um, y = depth, y<0 is oxide, y>0 is SiC)
+# Fine spacing at the channel (x 0.4-0.9, y near 0) where inversion happens.
+# --------------------------------------------------------------------------
+mesh space.mult=1.0
+x.mesh loc=0.0  spac=0.10
+x.mesh loc=0.4  spac=0.05
+x.mesh loc=0.9  spac=0.05
+x.mesh loc=2.5  spac=0.20
+x.mesh loc=3.0  spac=0.10
+
+y.mesh loc=$"ytox" spac=0.007
+y.mesh loc=0.0     spac=0.004
+y.mesh loc=0.2     spac=0.03
+y.mesh loc=0.7     spac=0.10
+y.mesh loc=7.0     spac=0.50
+y.mesh loc=10.0    spac=0.50
+
+# --------------------------------------------------------------------------
+# 2) REGIONS (later regions overwrite earlier ones where they overlap)
+# --------------------------------------------------------------------------
+# Gate oxide above the channel/JFET, x = 0 to 2.5 um
+region num=1 material=SiO2   x.min=0.0 x.max=2.5 y.min=$"ytox" y.max=0.0
+# The whole 10 um deep SiC body
+region num=2 material=4H-SiC y.min=0.0 y.max=10.0
+# Empty space above the source contact, x = 2.5 to 3.0 um
+region num=3 material=Air    x.min=2.5 x.max=3.0 y.min=$"ytox" y.max=0.0
+
+# --------------------------------------------------------------------------
+# 3) ELECTRODES
+# --------------------------------------------------------------------------
+# Gate: a line at the top of the oxide (poly-Si contact)
+electrode name=gate   x.min=0.0 x.max=2.5 y.min=$"ytox" y.max=$"ytox"
+# Source: touches N+ and P+ at the SiC surface (x = 2.5 to 3.0)
+electrode name=source x.min=2.5 x.max=3.0 y.min=0.0 y.max=0.0
+# Drain: the whole bottom surface
+electrode name=drain  bottom
+
+# --------------------------------------------------------------------------
+# 4) DOPING
+# --------------------------------------------------------------------------
+# N- epitaxial drift layer, 7 um, 2e16 cm-3
+doping uniform n.type conc=2e16 y.min=0.0 y.max=7.0
+# N+ substrate, 3 um, 2e18 cm-3
+doping uniform n.type conc=2e18 y.min=7.0 y.max=10.0
+# N JFET implant under the gate, between the P-wells, peak 5.5e16
+doping gaussian n.type conc=5.5e16 x.min=0.0 x.max=0.4 y.min=0.0 char=0.25 ratio.lateral=0.1
+# P-well body, peak = $pwell, junction depth 0.7 um. Sets the threshold voltage.
+doping gaussian p.type conc=$"pwell" x.min=0.4 x.max=3.0 y.min=0.0 junc=0.7 ratio.lateral=0.1
+# N+ source, peak 1e19, junction depth 0.2 um. Ends at 2.6 so P+ can touch the metal.
+doping gaussian n.type conc=1e19 x.min=0.9 x.max=2.6 y.min=0.0 junc=0.2 ratio.lateral=0.1
+# P+ body contact (moved to start at 2.6 um so the source metal shorts N+ and P+)
+doping gaussian p.type conc=1e19 x.min=2.6 x.max=3.0 y.min=0.0 junc=0.35 ratio.lateral=0.1
+
+# --------------------------------------------------------------------------
+# 5) CONTACTS, INTERFACE CHARGE, MODELS
+# --------------------------------------------------------------------------
+# n+ polysilicon gate work function
+contact name=gate n.poly
+# Fixed oxide charge Qf at the SiO2/SiC interface (under the gate only)
+interface qf=$"qfix" x.min=0.0 x.max=2.5 y.min=-0.005 y.max=0.005
+
+# --- OPTIONAL REALISM 1: lower channel mobility (uncomment to try) [RISK] ---
+# Real SiC MOSFET inversion-layer mobility is far below bulk. This lowers it.
+# mobility material=4H-SiC mun=200
+
+# --- OPTIONAL REALISM 2: interface traps (uncomment to try) [RISK] ---
+# Acceptor-like traps near the conduction band edge raise Vth and cut current.
+# inttrap acceptor e.level=0.2 density=5e12 sign=1e-15 sigp=1e-15 x.min=0.4 x.max=0.9 y.min=-0.005 y.max=0.005
+
+# conmob: doping-dependent mobility; fldmob: velocity saturation; srh: recombination
+# temperature: lattice temperature from the variable at the top  [RISK]
+models conmob fldmob srh temperature=$"temp" print
+# newton solver, 2 carriers, up to 100 iterations; trap = handle step failure
+method newton carriers=2 itlimit=100 trap maxtraps=10
+
+# extra quantities saved to the structure files (for field and mobility plots)
+output con.band val.band e.mobility e.field
+# save and view the structure (Figure 1: use Plot > Display > Net Doping)
+save outf=sic_dmos_struct.str
+tonyplot sic_dmos_struct.str
+
+# ==========================================================================
+# 6) Id-Vg TRANSFER CURVE (Vd = 0.1 V, linear region)
+# ==========================================================================
+solve init
+# fix the drain at 0.1 V
+solve vdrain=0.1
+log outf=sic_idvg.log
+# sweep the gate 0 to 15 V in 0.5 V steps. Vg is capped at 15 V because of the 35 nm oxide.
+solve vgate=0.0 vstep=0.5 vfinal=15 name=gate
+log off
+
+# --- extract from the transfer curve ---
+extract init inf="sic_idvg.log"
+# Vth by linear extrapolation (subtract Vd/2 = 0.05 V by hand)
+extract name="Vg_xint" xintercept(maxslope(curve(v."gate",i."drain")))
+# maximum drain current (A per um; x1000 = mA/mm)
+extract name="Idmax_A_um" max(i."drain")
+# peak transconductance (S per um)
+extract name="gm_max_S_um" slope(maxslope(curve(v."gate",i."drain")))
+
+# ==========================================================================
+# 7) Id-Vd OUTPUT CURVES at Vg = 5, 10, 15 V
+# The gate is ramped first with the drain at 0 V, then the drain is swept.
+# Small steps at the start help convergence in the linear region.
+# ==========================================================================
+
+# ---- Vg = 5 V (below Vth, device stays off) ----
+solve init
+solve vgate=2.5
+solve vgate=5
+log outf=sic_idvd_vg5.log
+solve vdrain=0.05 vstep=0.05 vfinal=0.5 name=drain
+solve vdrain=0.75 vstep=0.25 vfinal=10 name=drain
+log off
+
+# ---- Vg = 10 V (saturation visible) ----
+solve init
+solve vgate=2.5
+solve vgate=5
+solve vgate=7.5
+solve vgate=10
+log outf=sic_idvd_vg10.log
+solve vdrain=0.05 vstep=0.05 vfinal=0.5 name=drain
+solve vdrain=0.75 vstep=0.25 vfinal=10 name=drain
+log off
+
+# ---- Vg = 15 V (highest current, still near linear at Vd = 10 V) ----
+solve init
+solve vgate=2.5
+solve vgate=5
+solve vgate=7.5
+solve vgate=10
+solve vgate=12.5
+solve vgate=15
+log outf=sic_idvd_vg15.log
+solve vdrain=0.05 vstep=0.05 vfinal=0.5 name=drain
+solve vdrain=0.75 vstep=0.25 vfinal=10 name=drain
+# save the on-state structure (check peak oxide field: keep below ~3-4 MV/cm)
+save outf=sic_onstate_vg15.str
+log off
+
+# --- extract from the Vg = 15 V output curve ---
+extract init inf="sic_idvd_vg15.log"
+# current at Vd = 10 V
+extract name="Idmax_Vg15_A_um" max(i."drain")
+# low-field slope dId/dVd (S per um). Ron = 1/this (ohm.um)
+extract name="dId_dVd_S_um" slope(maxslope(curve(v."drain",i."drain")))
+
+# ==========================================================================
+# 8) OFF-STATE BREAKDOWN (Vg = 0 V)
+# SiC has a very low intrinsic carrier density, so the default solver gives
+# numerical noise. Gummel then Newton, loose current limit and small first steps.
+# ==========================================================================
+method gummel newton carriers=2 climit=1e-4 itlimit=100 maxtraps=10
+# Selberherr impact ionization (this is what produces breakdown)
+impact selb
+solve init
+solve vgate=0
+log outf=sic_bv.log
+solve vdrain=1 vstep=1 vfinal=10 name=drain
+solve vdrain=20 vstep=20 vfinal=200 name=drain
+# compl=1e-9 stops the sweep when the current reaches 1 nA/um
+solve vdrain=250 vstep=25 vfinal=1500 name=drain compl=1e-9
+log off
+# save the structure at the last bias point (plot E-field and impact generation)
+save outf=sic_bv_struct.str
+
+# ==========================================================================
+# 9) PLOTS
+# ==========================================================================
+tonyplot sic_idvg.log
+# overlay of the three output curves. After it opens, set X axis to Drain Voltage.
+tonyplot -overlay sic_idvd_vg5.log sic_idvd_vg10.log sic_idvd_vg15.log
+tonyplot sic_bv.log
+tonyplot sic_bv_struct.str
+quit
